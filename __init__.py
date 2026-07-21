@@ -1,0 +1,30 @@
+"""PromptToolkit - a collection of prompt utility nodes for ComfyUI."""
+
+from .nodes.replace_tags import ReplaceTagsNode
+from .nodes.resolution_master import ResolutionMasterPT
+from .nodes.save_image_strip import SaveImageStripTags
+from .nodes.signature_pad import SignaturePad, TextSignature
+from .nodes.watermark import ApplyWatermark
+
+NODE_CLASS_MAPPINGS = {
+    "ReplaceTags": ReplaceTagsNode,
+    "SaveImageStripTags": SaveImageStripTags,
+    "ApplyWatermark": ApplyWatermark,
+    "SignaturePad": SignaturePad,
+    "TextSignature": TextSignature,
+    "ResolutionMasterPT": ResolutionMasterPT,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "ReplaceTags": "Replace Tags",
+    "SaveImageStripTags": "Save Image (Strip Tags)",
+    "ApplyWatermark": "Apply Watermark",
+    "SignaturePad": "Signature Pad",
+    "TextSignature": "Text Signature",
+    "ResolutionMasterPT": "Resolution Master",
+}
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+
+# Frontend extension (visual watermark editor) served from ./web
+WEB_DIRECTORY = "./web"
