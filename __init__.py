@@ -1,5 +1,6 @@
 """PromptToolkit - a collection of prompt utility nodes for ComfyUI."""
 
+from .nodes.prompt_panel import PromptPanel
 from .nodes.replace_tags import ReplaceTagsNode
 from .nodes.resolution_master import ResolutionMasterPT
 from .nodes.save_image_strip import SaveImageStripTags
@@ -7,6 +8,7 @@ from .nodes.signature_pad import SignaturePad, TextSignature
 from .nodes.watermark import ApplyWatermark
 
 NODE_CLASS_MAPPINGS = {
+    "PromptPanel": PromptPanel,
     "ReplaceTags": ReplaceTagsNode,
     "SaveImageStripTags": SaveImageStripTags,
     "ApplyWatermark": ApplyWatermark,
@@ -16,6 +18,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "PromptPanel": "Prompt Panel",
     "ReplaceTags": "Replace Tags",
     "SaveImageStripTags": "Save Image (Strip Tags)",
     "ApplyWatermark": "Apply Watermark",

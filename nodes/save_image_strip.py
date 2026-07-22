@@ -180,8 +180,8 @@ class SaveImageStripTags:
                 "embed_workflow": (
                     "BOOLEAN",
                     {
-                        "default": False,
-                        "tooltip": "Embed the full ComfyUI workflow JSON into the image. The excluded tags are scrubbed from the embedded workflow/prompt strings too.",
+                        "default": True,
+                        "tooltip": "Embed the full ComfyUI workflow JSON (prompt + workflow PNG text chunks) so ComfyUI can load the image back into the graph. The excluded tags are scrubbed from the embedded workflow/prompt strings too.",
                     },
                 ),
                 "save_with_metadata": ("BOOLEAN", {"default": True}),

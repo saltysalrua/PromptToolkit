@@ -15,8 +15,18 @@ with whatever metadata could be recovered.
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
 from typing import Any
+
+import folder_paths  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+# Cache: file path -> short SHA256 hash (first 10 hex chars), matching
+# the A1111 "Model hash" convention that Civitai uses for resource linking.
+_hash_cache: dict[str, str] = {}
 
 # Node class types we recognise. Kept as sets so lookups are cheap and
 # so adding aliases is trivial.
@@ -258,8 +268,10 @@ _SAMPLER_MAP = {
     "dpmpp_2m_sde_gpu": "DPM++ 2M SDE",
     "ddim": "DDIM",
 }
+# Maps ComfyUI scheduler names to A1111-friendly labels, matching
+# LoraManager's convention so Civitai parses the Sampler field correctly.
 _SCHEDULER_MAP = {
-    "normal": "Normal",
+    "normal": "Simple",
     "simple": "Simple",
     "karras": "Karras",
     "exponential": "Exponential",
@@ -282,12 +294,18 @@ def extract_metadata(prompt: dict | None) -> dict[str, Any]:
         steps_v = _coerce_int(steps)
         if steps_v is not None:
             meta["steps"] = steps_v
+        # CFG / guidance — Flux and some newer models use "guidance"
+        # instead of "cfg"; collect both so format_parameters can pick.
         cfg = _resolve_literal(prompt, inputs.get("cfg"), field="cfg")
         if cfg is None:
             cfg = _resolve_literal(prompt, inputs.get("cfg_scale"), field="cfg_scale")
         cfg_v = _coerce_float(cfg)
         if cfg_v is not None:
             meta["cfg"] = cfg_v
+        guidance = _resolve_literal(prompt, inputs.get("guidance"), field="guidance")
+        guidance_v = _coerce_float(guidance)
+        if guidance_v is not None:
+            meta["guidance"] = guidance_v
         seed = _resolve_literal(prompt, inputs.get("seed"), field="seed")
         if seed is None:
             seed = _resolve_literal(
@@ -346,8 +364,60 @@ def extract_metadata(prompt: dict | None) -> dict[str, Any]:
     return meta
 
 
+def _calc_short_hash(file_path: str) -> str | None:
+    """Return the first 10 hex chars of a file's SHA256, or None on error."""
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    if file_path in _hash_cache:
+        return _hash_cache[file_path]
+    try:
+        sha = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 16), b""):
+                sha.update(chunk)
+        short = sha.hexdigest()[:10]
+        _hash_cache[file_path] = short
+        return short
+    except OSError as exc:
+        logger.warning("Failed to hash %s: %s", file_path, exc)
+        return None
+
+
+def _resolve_model_path(folder_type: str, name: str) -> str | None:
+    """Look up a model file path via folder_paths, handling common types."""
+    try:
+        return folder_paths.get_full_path(folder_type, name)
+    except Exception:
+        return None
+
+
+def _get_checkpoint_hash(checkpoint_name: str) -> str | None:
+    """Get the short SHA256 hash for a checkpoint or unet file."""
+    for folder in ("checkpoints", "unet", "diffusion_models"):
+        path = _resolve_model_path(folder, checkpoint_name)
+        if path:
+            return _calc_short_hash(path)
+    return None
+
+
+def _get_lora_hash(lora_name: str) -> str | None:
+    """Get the short SHA256 hash for a LoRA file."""
+    return _calc_short_hash(_resolve_model_path("loras", lora_name) or "")
+
+
 def format_parameters(meta: dict[str, Any]) -> str:
-    """Render a metadata dict as an A1111-style ``parameters`` string."""
+    """Render a metadata dict as an A1111-style ``parameters`` string.
+
+    The output follows the AUTOMATIC1111 convention so that Civitai can
+    auto-detect generation parameters and link resources via hashes::
+
+        positive prompt
+        <lora:name:weight> ...
+        Negative prompt: negative prompt
+        Steps: 20, Sampler: Euler a Karras, CFG scale: 7, Seed: 12345,
+        Size: 512x512, Model hash: abc123def4, Model: checkpoint_name,
+        Lora hashes: "lora1: hash1, lora2: hash2"
+    """
     if not meta:
         return ""
 
@@ -377,15 +447,36 @@ def format_parameters(meta: dict[str, Any]) -> str:
         params.append(f"Sampler: {sampler} {scheduler}")
     elif sampler:
         params.append(f"Sampler: {sampler}")
-    if "cfg" in meta:
-        params.append(f"CFG scale: {meta['cfg']}")
+    # CFG scale — prefer guidance (Flux) over cfg_scale over cfg,
+    # matching LoraManager's priority order.
+    cfg_val = meta.get("guidance")
+    if cfg_val is None:
+        cfg_val = meta.get("cfg_scale")
+    if cfg_val is None:
+        cfg_val = meta.get("cfg")
+    if cfg_val is not None:
+        params.append(f"CFG scale: {cfg_val}")
     if "seed" in meta:
         params.append(f"Seed: {meta['seed']}")
     if "size" in meta:
         params.append(f"Size: {meta['size']}")
     if "checkpoint" in meta:
-        ckpt = os.path.splitext(os.path.basename(str(meta["checkpoint"])))[0]
-        params.append(f"Model: {ckpt}")
+        ckpt_raw = str(meta["checkpoint"])
+        ckpt = os.path.splitext(os.path.basename(ckpt_raw))[0]
+        ckpt_hash = _get_checkpoint_hash(ckpt_raw)
+        if ckpt_hash:
+            params.append(f"Model hash: {ckpt_hash}, Model: {ckpt}")
+        else:
+            params.append(f"Model: {ckpt}")
+    # Lora hashes: "name1: hash1, name2: hash2"
+    if loras:
+        lora_hash_parts: list[str] = []
+        for name, _strength in loras:
+            h = _get_lora_hash(name)
+            if h:
+                lora_hash_parts.append(f"{name}: {h}")
+        if lora_hash_parts:
+            params.append(f'Lora hashes: "{", ".join(lora_hash_parts)}"')
     if params:
         parts.append(", ".join(params))
     return "\n".join(parts)
