@@ -308,14 +308,10 @@ function createPanel(node) {
 	}
 
 	const posSection = makeSection("Positive", "positive", "#7c7");
-	const negSection = makeSection("Negative", "negative", "#c77");
 
-	// Positive gets more space (flex 3 vs 2)
-	posSection.wrap.style.flex = "3 1 0";
-	negSection.wrap.style.flex = "2 1 0";
+	posSection.wrap.style.flex = "1 1 auto";
 
 	content.appendChild(posSection.wrap);
-	content.appendChild(negSection.wrap);
 
 	// ---- Resize handle (bottom-right corner) ----
 	const resizeHandle = document.createElement("div");
@@ -427,20 +423,12 @@ function createPanel(node) {
 			return;
 		}
 		const posW = getWidgetValue(node, "positive", "");
-		const negW = getWidgetValue(node, "negative", "");
 		if (
 			posSection.textarea !== document.activeElement &&
 			posSection.textarea.value !== posW
 		) {
 			posSection.textarea.value = posW;
 			posSection.updateCount();
-		}
-		if (
-			negSection.textarea !== document.activeElement &&
-			negSection.textarea.value !== negW
-		) {
-			negSection.textarea.value = negW;
-			negSection.updateCount();
 		}
 	}, 500);
 
@@ -474,6 +462,9 @@ function setupNode(node) {
 		display: "flex",
 		gap: "6px",
 		padding: "4px",
+		height: "28px",
+		boxSizing: "border-box",
+		overflow: "hidden",
 	});
 
 	const openBtn = document.createElement("button");
@@ -521,9 +512,12 @@ function setupNode(node) {
 			getValue: () => "",
 			setValue: () => {},
 			getMinHeight: () => 32,
+			computeSize: () => [0, 32],
 		},
 	);
 	domWidget.serialize = false;
+	domWidget.options = domWidget.options || {};
+	domWidget.options.boundingBox = () => [0, 32];
 }
 
 /* ------------------------------------------------------------------ */
