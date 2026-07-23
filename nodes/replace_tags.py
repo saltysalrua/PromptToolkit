@@ -1,5 +1,8 @@
 """Find-and-replace tags inside a prompt string."""
 
+from __future__ import annotations
+
+import re
 from typing import Any
 
 from .tag_utils import apply_replacements, parse_rules
@@ -71,4 +74,9 @@ class ReplaceTagsNode:
             whole_word=whole_word,
             case_sensitive=case_sensitive,
         )
-        return (result,)
+        # Light tidy so deleting a tag (find -> empty) does not leave
+        # dangling/doubled commas. Kept minimal to avoid mangling non-tag
+        # text: only collapses repeated commas and trims the ends.
+        result = re.sub(r"(,\s*)+", ", ", result)
+        result = re.sub(r"\s{2,}", " ", result)
+        return (result.strip(" ,"),)

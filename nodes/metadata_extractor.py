@@ -46,20 +46,6 @@ TEXT_ENCODE_TYPES = {
     "NVEmbed",
 }
 
-CHECKPOINT_TYPES = {
-    "CheckpointLoaderSimple",
-    "CheckpointLoader",
-    "UNETLoader",
-    "UnetLoaderGGUF",
-    "Load Diffusion Model",
-}
-
-LORA_TYPES = {
-    "LoraLoader",
-    "LoraLoaderModelOnly",
-    "XLABatchLoraLoader",
-}
-
 EMPTY_LATENT_TYPES = {
     "EmptyLatentImage",
     "EmptySD3LatentImage",
@@ -124,35 +110,101 @@ def _resolve_text(prompt: dict, value: Any, depth: int = 0) -> str:
     return ""
 
 
+# Input names that carry a model filename on loader nodes (class-agnostic).
+_CKPT_INPUT_NAMES = ("ckpt_name", "unet_name", "gguf_name", "model_name", "model_path")
+_LORA_SINGLE_INPUTS = ("lora_name", "lora")
+
+
+def _strip_model_name(name: str) -> str:
+    """Basename without extension - the A1111/Civitai convention for both
+    ``<lora:name:weight>`` tags and hash lookups."""
+    if not name:
+        return name
+    return os.path.splitext(os.path.basename(name))[0]
+
+
+def _extract_loras_from_inputs(inputs: dict) -> list[tuple[str, float]]:
+    """Collect ``(name, strength)`` from a node's widget inputs regardless of
+    its class. Covers the standard LoraLoader (``lora_name``), LoraManager's
+    stack loader (``loras`` list of dicts), rgthree Power Lora Loader
+    (``lora_1``..``lora_N`` dicts), Efficient/LoraStack (``lora_stack``
+    tuples) and anything else exposing the same input shapes.
+    """
+    out: list[tuple[str, float]] = []
+    # 1) single lora_name / lora literal
+    for key in _LORA_SINGLE_INPUTS:
+        v = inputs.get(key)
+        if isinstance(v, str) and v:
+            strength = inputs.get("strength_model", inputs.get("strength", 1.0))
+            sf = _coerce_float(strength)
+            out.append((_strip_model_name(v), sf if sf is not None else 1.0))
+    # 2) lora_stack: list of [path, model_strength, clip_strength]
+    ls = inputs.get("lora_stack")
+    if isinstance(ls, list):
+        for item in ls:
+            if (
+                isinstance(item, (list, tuple))
+                and len(item) >= 2
+                and isinstance(item[0], str)
+                and item[0]
+            ):
+                sf = _coerce_float(item[1])
+                out.append((_strip_model_name(item[0]), sf if sf is not None else 1.0))
+    # 3) LoraManager stack: "loras" = list of {name, strength, active, ...}
+    #    (possibly wrapped in {"__value__": [...]}).
+    lv = inputs.get("loras")
+    if isinstance(lv, dict) and "__value__" in lv:
+        lv = lv["__value__"]
+    if isinstance(lv, list):
+        for d in lv:
+            if not isinstance(d, dict):
+                continue
+            if not d.get("active", True) or d.get("_isDummy", False):
+                continue
+            nm = d.get("name")
+            if not isinstance(nm, str) or not nm:
+                continue
+            sf = _coerce_float(d.get("strength", 1.0))
+            out.append((_strip_model_name(nm), sf if sf is not None else 1.0))
+    # 4) rgthree Power Lora Loader: lora_1, lora_2, ... = {on, lora, strength}
+    for key, value in inputs.items():
+        if not key.lower().startswith("lora_"):
+            continue
+        if not isinstance(value, dict):
+            continue
+        if not value.get("on") or not value.get("lora"):
+            continue
+        sf = _coerce_float(value.get("strength", 1.0))
+        out.append((_strip_model_name(value["lora"]), sf if sf is not None else 1.0))
+    return out
+
+
 def _collect_loras(
-    prompt: dict, value: Any, acc: list[tuple[str, float]], depth: int = 0
+    prompt: dict,
+    value: Any,
+    node_loras: list[list[tuple[str, float]]],
+    depth: int = 0,
 ) -> None:
-    """Walk a model input chain collecting LoRAs until a checkpoint."""
+    """Walk the sampler's ``model`` input chain toward the checkpoint,
+    collecting each node's LoRAs (by input shape, not class name) into
+    ``node_loras`` as one sublist per node in walk (sampler->base) order.
+    The caller flattens with reversed() to get base-first ordering while
+    preserving each node's internal lora order.
+    """
     if depth > 16:
         return
     _, node = _follow(prompt, value)
     if node is None:
         return
-    class_type = node.get("class_type", "")
     inputs = node.get("inputs", {})
-    if class_type in LORA_TYPES:
-        name = inputs.get("lora_name") or inputs.get("lora") or ""
-        strength = inputs.get("strength_model", inputs.get("strength", 1.0))
-        strength_f = _coerce_float(strength)
-        if strength_f is None:
-            strength_f = 1.0
-        if name:
-            acc.append((str(name), strength_f))
-        # Keep walking toward the base model.
-        if "model" in inputs:
-            _collect_loras(prompt, inputs["model"], acc, depth=depth + 1)
-    elif class_type in CHECKPOINT_TYPES:
-        # Base checkpoint reached; recorded by the caller separately.
+    sub = _extract_loras_from_inputs(inputs)
+    if sub:
+        node_loras.append(sub)
+    # Base model loader (loads from file, no upstream model): stop walking.
+    if any(isinstance(inputs.get(k), str) and inputs.get(k) for k in _CKPT_INPUT_NAMES):
         return
-    else:
-        # Pass-through node (e.g. LoraStackCombiner) - follow its model.
-        if "model" in inputs:
-            _collect_loras(prompt, inputs["model"], acc, depth=depth + 1)
+    if "model" in inputs:
+        _collect_loras(prompt, inputs["model"], node_loras, depth=depth + 1)
 
 
 def _find_sampler(prompt: dict) -> tuple[str, dict] | None:
@@ -329,12 +381,24 @@ def extract_metadata(prompt: dict | None) -> dict[str, Any]:
             meta["negative_prompt"] = neg
 
         # Model / LoRA chain
-        loras: list[tuple[str, float]] = []
+        node_loras: list[list[tuple[str, float]]] = []
         model_in = inputs.get("model")
-        _collect_loras(prompt, model_in, loras)
-        # _collect_loras walks sampler -> checkpoint, so it appends LoRAs in
-        # reverse application order; flip to get base-first ordering.
-        loras.reverse()
+        _collect_loras(prompt, model_in, node_loras)
+        # node_loras is in sampler->base order; reverse for base-first
+        # ordering (matching LoraManager / A1111) while keeping each node's
+        # internal lora order intact.
+        loras = [lora for sub in reversed(node_loras) for lora in sub]
+        if not loras:
+            # Fallback: scan every node for lora inputs. Catches loaders
+            # that sit off the model chain (e.g. clip-only lora routing).
+            seen: set[str] = set()
+            for nd in prompt.values():
+                if not isinstance(nd, dict):
+                    continue
+                for nm, st in _extract_loras_from_inputs(nd.get("inputs", {})):
+                    if nm not in seen:
+                        seen.add(nm)
+                        loras.append((nm, st))
         if loras:
             meta["loras"] = loras
         # Walk past loras to find the checkpoint name.
@@ -343,17 +407,17 @@ def extract_metadata(prompt: dict | None) -> dict[str, Any]:
             _, node = _follow(prompt, cur)
             if node is None:
                 break
-            ct = node.get("class_type", "")
-            if ct in CHECKPOINT_TYPES:
-                name = (
-                    node.get("inputs", {}).get("ckpt_name")
-                    or node.get("inputs", {}).get("unet_name")
-                    or node.get("inputs", {}).get("model_name")
-                )
-                if name:
-                    meta["checkpoint"] = str(name)
+            cin = node.get("inputs", {})
+            name = None
+            for k in _CKPT_INPUT_NAMES:
+                v = cin.get(k)
+                if isinstance(v, str) and v:
+                    name = v
+                    break
+            if name:
+                meta["checkpoint"] = name
                 break
-            cur = node.get("inputs", {}).get("model")
+            cur = cin.get("model")
             if cur is None:
                 break
 
@@ -383,26 +447,63 @@ def _calc_short_hash(file_path: str) -> str | None:
         return None
 
 
-def _resolve_model_path(folder_type: str, name: str) -> str | None:
-    """Look up a model file path via folder_paths, handling common types."""
-    try:
-        return folder_paths.get_full_path(folder_type, name)
-    except Exception:
+_filename_list_cache: dict[str, list[str]] = {}
+
+
+def _get_filename_list(folder_type: str) -> list[str]:
+    names = _filename_list_cache.get(folder_type)
+    if names is None:
+        try:
+            names = list(folder_paths.get_filename_list(folder_type))
+        except Exception:
+            names = []
+        _filename_list_cache[folder_type] = names
+    return names
+
+
+def _find_model_file(folder_types: list[str], name: str) -> str | None:
+    """Resolve a model file path from a name that may be a bare basename, a
+    basename with extension, or a relative subfolder path.
+
+    Tries ``folder_paths.get_full_path`` first, then falls back to matching
+    the basename-without-extension against the registered file list. This is
+    needed because LoraManager's stack loader stores stripped names (no ext,
+    no subfolder) and because loras live in subfolders - a bare filename does
+    not resolve via get_full_path in either case.
+    """
+    if not name:
         return None
+    stripped = _strip_model_name(name)
+    for ft in folder_types:
+        try:
+            p = folder_paths.get_full_path(ft, name)
+        except Exception:
+            p = None
+        if p and os.path.isfile(p):
+            return p
+        for rel in _get_filename_list(ft):
+            if _strip_model_name(rel) == stripped:
+                try:
+                    p = folder_paths.get_full_path(ft, rel)
+                except Exception:
+                    p = None
+                if p and os.path.isfile(p):
+                    return p
+    return None
 
 
 def _get_checkpoint_hash(checkpoint_name: str) -> str | None:
     """Get the short SHA256 hash for a checkpoint or unet file."""
-    for folder in ("checkpoints", "unet", "diffusion_models"):
-        path = _resolve_model_path(folder, checkpoint_name)
-        if path:
-            return _calc_short_hash(path)
-    return None
+    path = _find_model_file(
+        ["checkpoints", "unet", "diffusion_models"], checkpoint_name
+    )
+    return _calc_short_hash(path) if path else None
 
 
 def _get_lora_hash(lora_name: str) -> str | None:
     """Get the short SHA256 hash for a LoRA file."""
-    return _calc_short_hash(_resolve_model_path("loras", lora_name) or "")
+    path = _find_model_file(["loras"], lora_name)
+    return _calc_short_hash(path) if path else None
 
 
 def format_parameters(meta: dict[str, Any]) -> str:

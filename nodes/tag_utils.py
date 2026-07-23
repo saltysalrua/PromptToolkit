@@ -46,10 +46,16 @@ def build_pattern(
     """Compile a search pattern for one tag/rule."""
     body = needle if use_regex else re.escape(needle)
     if whole_word:
-        # Comma / parenthesis / whitespace friendly boundaries so
-        # `cat` does not match inside `category`, while `(cat:1.2)`
-        # and multi-word tags like `cat ears` still match as a unit.
-        body = r"(?<![A-Za-z0-9_])" + body + r"(?![A-Za-z0-9_])"
+        # Comma / parenthesis / newline / string-edge boundaries so a tag
+        # only matches as a WHOLE comma-delimited tag, never as a word inside
+        # a larger multi-word tag. Space is intentionally NOT a boundary: in
+        # Danbooru-style prompts tags are comma-separated and spaces join words
+        # inside one tag (e.g. `cat ears`), so excluding `cat` must not mangle
+        # `cat ears` into `ears`. CJK tags benefit too: `loli` won't bite into
+        # `lolicon` is handled by the `[A-Za-z0-9_]`-free boundaries below.
+        body = (
+            r"(?:^|(?<=[,(\[]\s)|(?<=[,(\[])|(?<=\n))" + body + r"(?=\s*[,\n)\]:]|\s*$)"
+        )
     flags = 0 if case_sensitive else re.IGNORECASE
     return re.compile(body, flags)
 
@@ -125,10 +131,18 @@ def strip_tags(
 
     # Tidy: drop empty weighted groups and groups left with only a
     # weight, collapse repeated commas, normalise spacing, then trim.
+    # Also strip empty `()` left behind by nested weights like
+    # `((loli:1.2))` once the inner group is removed; loop so multi-level
+    # nesting fully collapses.
     result = re.sub(r"\(\s*,+\s*\)", "", result)  # empty weighted groups
     result = re.sub(r"\(\s*,+\s*", "(", result)  # (, cute:1.2) -> (cute:1.2)
     result = re.sub(r",\s*:", ":", result)  # (cute, :1.2) -> (cute:1.2)
     result = re.sub(r"\(\s*:[^()]*\)", "", result)  # group left with only a weight
+    while True:
+        nxt = re.sub(r"\(\s*\)", "", result)
+        if nxt == result:
+            break
+        result = nxt
     result = re.sub(r"\(\s+", "(", result)
     result = re.sub(r"\s+\)", ")", result)
     result = re.sub(r"(,\s*)+", ", ", result)  # collapse repeated commas
@@ -184,6 +198,12 @@ def scrub_tags(
     result = re.sub(r"\(\s*,+\s*\)", "", result)
     result = re.sub(r"\(\s*,+\s*", "(", result)
     result = re.sub(r",\s*:", ":", result)
+    # Collapse empty parens left by nested weighted groups like ((tag:1.2)).
+    while True:
+        nxt = re.sub(r"\(\s*\)", "", result)
+        if nxt == result:
+            break
+        result = nxt
     result = re.sub(r"(,\s*)+", ", ", result)
     return result.strip(" ,")
 

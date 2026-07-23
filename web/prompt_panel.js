@@ -452,18 +452,30 @@ function createPanel(node) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Node setup: add a "Open Panel" button widget                        */
+/* Node setup: button widget with a draggable height grip              */
 /* ------------------------------------------------------------------ */
 
+const BTN_HEIGHT_PROP = "pt_btn_height";
+const BTN_DEFAULT_H = 46;
+const BTN_MIN_H = 34;
+const BTN_MAX_H = 400;
+
 function setupNode(node) {
-	// Small button bar inside the node
+	let barH = BTN_DEFAULT_H;
+
+	// Root element of the widget. It always fills the whole widget area so
+	// there is never dead space under the button, regardless of the area
+	// height the layout assigns us.
 	const btnBar = document.createElement("div");
+	btnBar.className = "pt-prompt-panel-bar";
 	Object.assign(btnBar.style, {
 		display: "flex",
-		gap: "6px",
-		padding: "4px",
-		height: "28px",
+		flexDirection: "column",
+		width: "100%",
+		height: BTN_DEFAULT_H + "px",
+		minHeight: BTN_DEFAULT_H + "px",
 		boxSizing: "border-box",
+		padding: "4px 4px 2px",
 		overflow: "hidden",
 	});
 
@@ -472,11 +484,12 @@ function setupNode(node) {
 	openBtn.textContent = "📂 Open Prompt Panel";
 	Object.assign(openBtn.style, {
 		flex: "1 1 auto",
+		width: "100%",
 		background: "#2a4a2a",
 		border: "1px solid #3a6a3a",
 		borderRadius: "4px",
 		color: "#8c8",
-		fontSize: "11px",
+		fontSize: "12px",
 		padding: "4px 8px",
 		cursor: "pointer",
 	});
@@ -502,7 +515,100 @@ function setupNode(node) {
 		openBtn.textContent = "📂 Close Prompt Panel";
 	});
 
+	// ---- Vertical drag grip (drag to resize, double-click to reset) ----
+	// Sits BETWEEN the textarea above and the button below, acting as a
+	// splitter: drag up -> taller button area (textarea shrinks), drag
+	// down -> shorter. The node itself is left alone; the flexible
+	// textarea absorbs the difference, so the grip follows the cursor.
+	const grip = document.createElement("div");
+	grip.title = "上下拖动调整按钮高度（双击重置） / Drag to resize";
+	Object.assign(grip.style, {
+		flex: "0 0 10px",
+		cursor: "ns-resize",
+		display: "flex",
+		alignItems: "center",
+		justifyContent: "center",
+		touchAction: "none",
+		userSelect: "none",
+	});
+	const gripLine = document.createElement("div");
+	Object.assign(gripLine.style, {
+		width: "36px",
+		height: "3px",
+		borderRadius: "2px",
+		background: "#555",
+		pointerEvents: "none",
+	});
+	grip.appendChild(gripLine);
+	grip.addEventListener("mouseenter", () => {
+		gripLine.style.background = "#888";
+	});
+	grip.addEventListener("mouseleave", () => {
+		gripLine.style.background = "#555";
+	});
+	// Grip first: it renders between the textarea widget and the button.
+	btnBar.appendChild(grip);
 	btnBar.appendChild(openBtn);
+
+	/** Under canvas zoom, clientY deltas are CSS-scaled screen pixels.
+	 * Convert with the element's own rect/client ratio (works in both
+	 * legacy-canvas and Vue-nodes modes). */
+	function currentZoom() {
+		const rect = btnBar.getBoundingClientRect();
+		const ch = btnBar.clientHeight;
+		return ch > 0 && rect.height > 0 ? rect.height / ch : 1;
+	}
+
+	function applyHeight(h, persist = true) {
+		barH = Math.max(BTN_MIN_H, Math.min(BTN_MAX_H, Math.round(h)));
+		btnBar.style.height = barH + "px";
+		btnBar.style.minHeight = barH + "px";
+		if (persist) {
+			node.properties = node.properties || {};
+			node.properties[BTN_HEIGHT_PROP] = barH;
+		}
+		// Legacy canvas: next draw re-runs the widget layout with our new
+		// computeSize(). Vue nodes: the grid row is min-content and follows
+		// the element height via its ResizeObserver.
+		node.graph?.setDirtyCanvas?.(true, true);
+	}
+
+	{
+		let dragging = false;
+		let startY = 0;
+		let startH = 0;
+		let zoom = 1;
+		grip.addEventListener("pointerdown", (e) => {
+			dragging = true;
+			startY = e.clientY;
+			startH = barH;
+			zoom = currentZoom() || 1;
+			grip.setPointerCapture?.(e.pointerId);
+			e.preventDefault();
+			e.stopPropagation();
+		});
+		grip.addEventListener("pointermove", (e) => {
+			if (!dragging) return;
+			// Inverted: the grip is the TOP edge of the button area, so
+			// dragging up enlarges it (and shrinks the textarea above).
+			const newH = Math.max(
+				BTN_MIN_H,
+				Math.min(BTN_MAX_H, Math.round(startH - (e.clientY - startY) / zoom)),
+			);
+			applyHeight(newH);
+			e.preventDefault();
+			e.stopPropagation();
+		});
+		const endDrag = () => {
+			dragging = false;
+		};
+		grip.addEventListener("pointerup", endDrag);
+		grip.addEventListener("pointercancel", endDrag);
+		grip.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			applyHeight(BTN_DEFAULT_H);
+		});
+	}
 
 	const domWidget = node.addDOMWidget(
 		"prompt_panel_btn",
@@ -511,13 +617,35 @@ function setupNode(node) {
 		{
 			getValue: () => "",
 			setValue: () => {},
-			getMinHeight: () => 32,
-			computeSize: () => [0, 32],
+			margin: 4,
 		},
 	);
 	domWidget.serialize = false;
-	domWidget.options = domWidget.options || {};
-	domWidget.options.boundingBox = () => [0, 32];
+	// Fixed height in the litegraph widget layout: widgets with their own
+	// computeSize() are laid out at that exact height, so the flexible
+	// multiline textarea above absorbs all leftover node space instead of
+	// the free space being distributed to us (which caused the button area
+	// to eat half the node). arrange() re-runs every frame in BOTH legacy
+	// and Vue-nodes modes, so height changes apply live.
+	domWidget.computeSize = () => [0, barH];
+	// In Vue-nodes mode a widget with computeLayoutSize gets a stretchy
+	// `auto` grid row; nulling it makes the row `min-content`, hugging
+	// btnBar's explicit pixel height instead of stretching to half the node.
+	domWidget.computeLayoutSize = null;
+
+	// Restore persisted height. Workflow loading calls configure() AFTER
+	// onNodeCreated, so chain it to re-apply the saved height then.
+	const applySaved = () => {
+		const saved = Number(node.properties?.[BTN_HEIGHT_PROP]);
+		if (saved > 0) applyHeight(saved, false);
+	};
+	applySaved(); // covers duplicate/paste where properties already exist
+	const origConfigure = node.configure;
+	node.configure = function () {
+		const r = origConfigure?.apply(this, arguments);
+		applySaved();
+		return r;
+	};
 }
 
 /* ------------------------------------------------------------------ */
