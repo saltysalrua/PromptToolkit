@@ -100,8 +100,26 @@ def _resolve_text(prompt: dict, value: Any, depth: int = 0) -> str:
         if node is None:
             return ""
         inputs = node.get("inputs", {})
-        # CLIPTextEncode and friends carry the literal on ``text``.
-        for key in ("text", "text_pos", "text_neg", "string", "value"):
+        # CLIPTextEncode and friends carry the literal on ``text``; other
+        # prompt-provider nodes (our PromptPanel uses ``positive``; the
+        # LoraManager dual-encoder group node exposes ``positive_1``/
+        # ``positive_2``; ReplaceTags uses ``prompt``) need the extra keys so
+        # the prompt can be traced through them.
+        for key in (
+            "text",
+            "text_pos",
+            "text_neg",
+            "string",
+            "value",
+            "prompt",
+            "prompt_opt",
+            "positive",
+            "negative",
+            "positive_1",
+            "positive_2",
+            "negative_1",
+            "negative_2",
+        ):
             if key in inputs:
                 resolved = _resolve_text(prompt, inputs[key], depth=depth + 1)
                 if resolved:
