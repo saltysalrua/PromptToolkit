@@ -22,6 +22,8 @@ from typing import Any
 
 import folder_paths  # type: ignore
 
+from .metadata_hook import CAPTURE
+
 logger = logging.getLogger(__name__)
 
 # Cache: file path -> short SHA256 hash (first 10 hex chars), matching
@@ -89,8 +91,53 @@ def _resolve_literal(prompt: dict, value: Any, *, field: str) -> Any:
     return value
 
 
+# Input keys that may carry prompt text on a node (used for both static
+# graph traversal and runtime-captured resolved inputs).
+_TEXT_KEYS = (
+    "text",
+    "text_pos",
+    "text_neg",
+    "string",
+    "value",
+    "prompt",
+    "prompt_opt",
+    "positive",
+    "negative",
+    "positive_1",
+    "positive_2",
+    "negative_1",
+    "negative_2",
+)
+
+
+def _runtime_text_for_node(node_id) -> str | None:
+    """Return the resolved prompt text captured at execution time for a node.
+
+    ComfyUI resolves input refs before calling a node's FUNCTION, so the
+    runtime capture holds the actual string values - including for opaque
+    encoder/group nodes (e.g. a dual-encoder that combines positive_1 +
+    positive_2) whose text is not recoverable from the static graph.
+    Returns None when the node was not captured (e.g. cached / not run).
+    """
+    cap = CAPTURE.get(node_id)
+    if not cap:
+        return None
+    inputs = cap.get("inputs", {})
+    parts: list[str] = []
+    for key in _TEXT_KEYS:
+        v = inputs.get(key)
+        if isinstance(v, str) and v and v not in parts:
+            parts.append(v)
+    return ", ".join(parts) if parts else None
+
+
 def _resolve_text(prompt: dict, value: Any, depth: int = 0) -> str:
-    """Resolve a prompt-text value, following references up to a limit."""
+    """Resolve a prompt-text value, following references up to a limit.
+
+    Prefers the runtime-captured resolved text for the referenced node
+    (handles opaque encoder/group nodes), then falls back to static graph
+    traversal.
+    """
     if depth > 8:
         return ""
     if isinstance(value, str):
@@ -99,27 +146,12 @@ def _resolve_text(prompt: dict, value: Any, depth: int = 0) -> str:
         _, node = _follow(prompt, value)
         if node is None:
             return ""
+        node_id = value[0]
+        rt = _runtime_text_for_node(node_id)
+        if rt:
+            return rt
         inputs = node.get("inputs", {})
-        # CLIPTextEncode and friends carry the literal on ``text``; other
-        # prompt-provider nodes (our PromptPanel uses ``positive``; the
-        # LoraManager dual-encoder group node exposes ``positive_1``/
-        # ``positive_2``; ReplaceTags uses ``prompt``) need the extra keys so
-        # the prompt can be traced through them.
-        for key in (
-            "text",
-            "text_pos",
-            "text_neg",
-            "string",
-            "value",
-            "prompt",
-            "prompt_opt",
-            "positive",
-            "negative",
-            "positive_1",
-            "positive_2",
-            "negative_1",
-            "negative_2",
-        ):
+        for key in _TEXT_KEYS:
             if key in inputs:
                 resolved = _resolve_text(prompt, inputs[key], depth=depth + 1)
                 if resolved:

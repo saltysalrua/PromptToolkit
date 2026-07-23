@@ -31,3 +31,18 @@ __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
 # Frontend extension (visual watermark editor) served from ./web
 WEB_DIRECTORY = "./web"
+
+
+import logging as _logging
+
+# Install the runtime prompt-capture hook (best-effort; must never break
+# node loading). See nodes/metadata_hook.py for why this is needed.
+try:
+    from .nodes.metadata_hook import install as _install_runtime_hook
+
+    _install_runtime_hook()
+except Exception:  # pragma: no cover - defensive
+    _logging.getLogger("PromptToolkit").exception(
+        "Failed to install runtime prompt-capture hook; "
+        "prompt metadata will use static extraction only."
+    )
