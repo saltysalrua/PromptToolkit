@@ -18,10 +18,9 @@ import os
 import re
 from typing import Any
 
+import folder_paths  # type: ignore
 import torch  # type: ignore[import-not-found]  # provided by the ComfyUI runtime
 from PIL import PngImagePlugin
-
-import folder_paths  # type: ignore
 
 from .metadata_extractor import extract_metadata, format_parameters
 from .tag_utils import parse_tag_list, scrub_object, strip_tags
@@ -87,16 +86,52 @@ def _resolve_node_widget(name: str, widget: str, prompt: dict | None) -> Any:
     return None
 
 
-def expand_filename_prefix(prefix: str, prompt: dict | None) -> str:
-    """Expand %...% macros the way the frontend does for core save nodes."""
+def expand_filename_prefix(
+    prefix: str, prompt: dict | None, meta: dict | None = None
+) -> str:
+    """Expand ``%...%`` macros in a filename prefix.
+
+    Handles the frontend macros ``%date:FORMAT%`` and ``%Node.widget%`` plus
+    the LoraManager-style ``%seed%`` / ``%model%`` / ``%pprompt[:N]`` /
+    ``%nprompt[:N]`` / ``%date%`` macros. ``%width%`` / ``%height%`` /
+    ``%year%`` ... are left intact for the backend
+    ``folder_paths.get_save_image_path`` to expand with the real image dims.
+    """
     if "%" not in prefix:
         return prefix
+    if meta is None and prompt:
+        meta = extract_metadata(prompt)
+    meta = meta or {}
     now = datetime.datetime.now()
 
     def repl(match: re.Match) -> str:
         inner = match.group(1)
         if inner.startswith("date:"):
             return _format_date(inner[5:], now)
+        key, sep, rest = inner.partition(":")
+        if key == "date":
+            return _format_date("yyyyMMddhhmmss", now)
+        if key == "seed":
+            return str(meta.get("seed", ""))
+        if key == "model":
+            ckpt = meta.get("checkpoint", "")
+            return os.path.splitext(os.path.basename(ckpt))[0] if ckpt else ""
+        if key == "pprompt":
+            text = (meta.get("prompt", "") or "").replace("\n", " ")
+            if sep and rest.isdigit():
+                try:
+                    text = text[: int(rest)]
+                except ValueError:
+                    pass
+            return text.strip()
+        if key == "nprompt":
+            text = (meta.get("negative_prompt", "") or "").replace("\n", " ")
+            if sep and rest.isdigit():
+                try:
+                    text = text[: int(rest)]
+                except ValueError:
+                    pass
+            return text.strip()
         parts = inner.split(".")
         if len(parts) == 2:
             value = _resolve_node_widget(parts[0], parts[1], prompt)
@@ -366,7 +401,7 @@ class SaveImageStripTags:
                 file_format.upper(),
             )
 
-        filename_prefix = expand_filename_prefix(filename_prefix, prompt)
+        filename_prefix = expand_filename_prefix(filename_prefix, prompt, meta=_meta)
 
         full_output_folder, filename, counter, subfolder, _prefix = (
             folder_paths.get_save_image_path(
