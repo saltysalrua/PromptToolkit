@@ -1,5 +1,7 @@
 # PromptToolkit
 
+> English | [中文](README_zh.md)
+
 ComfyUI custom nodes: prompt panel with an AI bridge, watermark compositing, signature pad, text signature, resolution master, and tag utilities.
 
 ## Nodes
