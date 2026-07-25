@@ -1,4 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentToolResult,
+	ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 /**
@@ -67,6 +70,16 @@ interface ResolutionState {
 	rescale_value: number | null;
 }
 
+type GetPromptDetails =
+	| { node_id: string; positive: string }
+	| { prompts: Record<string, string> };
+
+type GetResolutionDetails =
+	| { node_id: string; state: ResolutionState }
+	| { resolutions: Record<string, ResolutionState> };
+
+type QueueDetails = ImageEntry | Record<string, never>;
+
 function formatResolution(nodeId: string, s: ResolutionState): string {
 	const lines = [
 		`Node ${nodeId}: ${s.width}×${s.height} (batch ${s.batch_size ?? "?"})`,
@@ -79,9 +92,9 @@ function formatResolution(nodeId: string, s: ResolutionState): string {
 	return lines.join("\n");
 }
 
-/** Round to the nearest multiple of 8 and clamp into [8, 32768]. */
+/** Round to the nearest multiple of 64 and clamp into [64, 32768]. */
 function snapDim(v: number): number {
-	return Math.min(Math.max(Math.round(v / 8) * 8, 8), 32768);
+	return Math.min(Math.max(Math.round(v / 64) * 64, 64), 32768);
 }
 
 function formatImages(images: ImageEntry[]): string {
@@ -111,7 +124,7 @@ export default function (pi: ExtensionAPI) {
 				Type.String({ description: "PromptPanel node id; omit to list all" }),
 			),
 		}),
-		async execute(_id, params) {
+		async execute(_id, params): Promise<AgentToolResult<GetPromptDetails>> {
 			if (params.node_id) {
 				const data = await api<{ node_id: string; positive: string }>(
 					`/pt/ai/prompt/${encodeURIComponent(params.node_id)}`,
@@ -174,7 +187,8 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Read the current state (width, height, batch size, latent type, rescale factor) " +
 			"of Resolution Master nodes in the running ComfyUI. " +
-			"Without node_id returns all registered nodes.",
+			"Without node_id returns all registered nodes. Always read the current " +
+			"state before changing only the aspect ratio (see comfyui_set_resolution).",
 		promptSnippet: "Read the current ComfyUI Resolution Master state",
 		parameters: Type.Object({
 			node_id: Type.Optional(
@@ -183,7 +197,7 @@ export default function (pi: ExtensionAPI) {
 				}),
 			),
 		}),
-		async execute(_id, params) {
+		async execute(_id, params): Promise<AgentToolResult<GetResolutionDetails>> {
 			if (params.node_id) {
 				const data = await api<{ node_id: string; state: ResolutionState }>(
 					`/pt/ai/resolution/${encodeURIComponent(params.node_id)}`,
@@ -215,18 +229,23 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Set width/height (and optionally batch size, latent type, rescale) of a " +
 			"Resolution Master node in the running ComfyUI. width/height are snapped " +
-			"to a multiple of 8. The on-screen node updates live via websocket. " +
-			"rescale_value semantics depend on rescale_mode: manual = the factor " +
-			"itself (e.g. 2 for 2x); resolution = target P of a 16:9 frame " +
-			"(e.g. 1080); megapixels = target MP (e.g. 2.0).",
+			"to multiples of 64. When asked to change only the aspect ratio or " +
+			"orientation (no exact dims given), first read the node with " +
+			"comfyui_get_resolution and choose dims that keep width*height " +
+			"approximately equal to the current total — only the ratio changes, the " +
+			"pixel count (and thus generation cost/quality) stays at the same " +
+			"magnitude. The on-screen node updates live via websocket. rescale_value " +
+			"semantics depend on rescale_mode: manual = the factor itself " +
+			"(e.g. 2 for 2x); resolution = target P of a 16:9 frame (e.g. 1080); " +
+			"megapixels = target MP (e.g. 2.0).",
 		promptSnippet: "Set the resolution of a ComfyUI Resolution Master node",
 		parameters: Type.Object({
 			node_id: Type.String({ description: "Resolution Master node id" }),
 			width: Type.Optional(
-				Type.Number({ description: "Image width in px (snapped to multiple of 8)" }),
+				Type.Number({ description: "Image width in px (snapped to multiple of 64)" }),
 			),
 			height: Type.Optional(
-				Type.Number({ description: "Image height in px (snapped to multiple of 8)" }),
+				Type.Number({ description: "Image height in px (snapped to multiple of 64)" }),
 			),
 			batch_size: Type.Optional(
 				Type.Number({ description: "Latent batch size (1-4096)" }),
@@ -302,7 +321,12 @@ export default function (pi: ExtensionAPI) {
 				Type.Number({ description: "Max wait seconds (default 300)" }),
 			),
 		}),
-		async execute(_id, params, signal, onUpdate) {
+		async execute(
+			_id,
+			params,
+			signal,
+			onUpdate,
+		): Promise<AgentToolResult<QueueDetails>> {
 			const wait = params.wait ?? true;
 			const timeoutMs = (params.timeout_secs ?? 300) * 1000;
 
@@ -326,7 +350,7 @@ export default function (pi: ExtensionAPI) {
 			let idlePolls = 0;
 			while (Date.now() < deadline) {
 				if (signal?.aborted) {
-					return { content: [{ type: "text", text: "Cancelled" }] };
+					return { content: [{ type: "text", text: "Cancelled" }], details: {} };
 				}
 				await new Promise((r) => setTimeout(r, 3000));
 				const latest = await api<{ images: ImageEntry[] }>(
@@ -368,6 +392,7 @@ export default function (pi: ExtensionAPI) {
 							text: `Waiting for generation… (${Math.round((timeoutMs - (deadline - Date.now())) / 1000)}s elapsed)`,
 						},
 					],
+					details: {},
 				});
 			}
 			throw new Error(
