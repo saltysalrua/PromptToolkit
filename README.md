@@ -1,8 +1,38 @@
 # PromptToolkit
 
-ComfyUI custom nodes: watermark compositing, signature pad, text signature, and resolution master.
+ComfyUI custom nodes: prompt panel with an AI bridge, watermark compositing, signature pad, text signature, resolution master, and tag utilities.
 
 ## Nodes
+
+### Prompt Panel
+
+A positive-prompt holder with a draggable floating panel for quick editing without navigating the graph. Also participates in the AI bridge (below): its text is readable and writable over HTTP.
+
+### AI Image Output
+
+Saves images (like a slim SaveImage with UI preview) and publishes each file to the local AI bridge so an AI harness can retrieve generation results.
+
+### AI Bridge (HTTP API for AI agents)
+
+A lightweight bridge that lets a local AI harness (pi, Claude Code, scripts, …) drive ComfyUI with plain HTTP — no MCP server required. Routes are registered directly on the ComfyUI server:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /pt/ai/prompt` | All registered PromptPanel texts `{node_id: text}` |
+| `GET /pt/ai/prompt/{node_id}` | One node's prompt text |
+| `POST /pt/ai/prompt/set` | Set a PromptPanel's text; the on-screen widget updates live via websocket (`{node_id, positive}`) |
+| `POST /pt/ai/prompt/update` | Frontend → backend sync (used by the page, not by harnesses) |
+| `POST /pt/ai/queue` | Ask the frontend to press Queue |
+| `GET /pt/ai/image/latest?limit=N` | Newest files from AI Image Output nodes (includes `abs_path`) |
+| `GET /pt/ai/image/raw?index=N` | Raw bytes of a published image (0 = newest) |
+
+The frontend (`web/ai_bridge.js`) pushes PromptPanel values to the backend every ~1.5 s, and listens for the websocket events `pt_ai_set_prompt` / `pt_ai_queue`. A browser tab with the graph must be open for widget sync and queueing.
+
+Example flow for an agent: read prompt → `POST /pt/ai/prompt/set` → `POST /pt/ai/queue` → poll `GET /pt/ai/image/latest` → read the file from `abs_path`.
+
+### Replace Tags
+
+Find-and-replace tags inside prompt text, with whole-word matching that respects comma-delimited tags and multi-word phrases.
 
 ### Apply Watermark
 
@@ -10,7 +40,7 @@ Composite a transparent PNG watermark onto images with position, scale, opacity,
 
 ### Save Image (Strip Tags)
 
-Save images with optional watermark compositing and metadata stripping. Supports `%date:...%` and `%NodeTitle.widget%` filename macros.
+Save images with optional watermark compositing and metadata stripping. Supports `%date:...%`, `%NodeTitle.widget%`, `%seed%`, `%model%`, `%pprompt` / `%nprompt` filename macros, and writes Civitai-compatible A1111 metadata (model/lora hashes).
 
 ### Signature Pad
 

@@ -1,5 +1,8 @@
 """PromptToolkit - a collection of prompt utility nodes for ComfyUI."""
 
+import logging as _logging
+
+from .nodes.ai_bridge import AIImageOutput
 from .nodes.prompt_panel import PromptPanel
 from .nodes.replace_tags import ReplaceTagsNode
 from .nodes.resolution_master import ResolutionMasterPT
@@ -15,6 +18,7 @@ NODE_CLASS_MAPPINGS = {
     "SignaturePad": SignaturePad,
     "TextSignature": TextSignature,
     "ResolutionMasterPT": ResolutionMasterPT,
+    "AIImageOutput": AIImageOutput,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -25,6 +29,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SignaturePad": "Signature Pad",
     "TextSignature": "Text Signature",
     "ResolutionMasterPT": "Resolution Master",
+    "AIImageOutput": "AI Image Output",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
@@ -32,8 +37,6 @@ __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 # Frontend extension (visual watermark editor) served from ./web
 WEB_DIRECTORY = "./web"
 
-
-import logging as _logging
 
 # Install the runtime prompt-capture hook (best-effort; must never break
 # node loading). See nodes/metadata_hook.py for why this is needed.

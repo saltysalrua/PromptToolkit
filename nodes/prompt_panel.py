@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .ai_bridge import register_prompt
+
 
 class PromptPanel:
     """A prompt holder node with a floating-panel editor on the frontend."""
@@ -35,6 +37,7 @@ class PromptPanel:
                     },
                 ),
             },
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
     RETURN_TYPES = ("STRING",)
@@ -42,5 +45,7 @@ class PromptPanel:
     FUNCTION = "passthrough"
     OUTPUT_NODE = True
 
-    def passthrough(self, positive: str = "") -> tuple[str]:
+    def passthrough(self, positive: str = "", unique_id: Any = None) -> tuple[str]:
+        # Publish the text to the AI bridge so a harness can read it back.
+        register_prompt(unique_id, positive)
         return (positive,)

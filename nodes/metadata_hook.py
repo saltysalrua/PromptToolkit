@@ -138,8 +138,12 @@ def _install_sync(execution) -> None:
     original_map = execution._map_node_over_list
 
     def map_with_capture(
-        obj, input_data_all, func, allow_interrupt=False,
-        execution_block_cb=None, pre_execute_cb=None,
+        obj,
+        input_data_all,
+        func,
+        allow_interrupt=False,
+        execution_block_cb=None,
+        pre_execute_cb=None,
     ):
         if func == getattr(obj, "FUNCTION", None) and hasattr(obj, "__class__"):
             try:
@@ -149,8 +153,12 @@ def _install_sync(execution) -> None:
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug("[PromptToolkit] capture error: %s", exc)
         return original_map(
-            obj, input_data_all, func, allow_interrupt,
-            execution_block_cb, pre_execute_cb,
+            obj,
+            input_data_all,
+            func,
+            allow_interrupt,
+            execution_block_cb,
+            pre_execute_cb,
         )
 
     execution._map_node_over_list = map_with_capture
@@ -161,9 +169,15 @@ def _install_async(execution, map_name: str) -> None:
     original_map = getattr(execution, map_name)
 
     async def map_with_capture(
-        prompt_id, unique_id, obj, input_data_all, func,
-        allow_interrupt=False, execution_block_cb=None,
-        pre_execute_cb=None, v3_data=None,
+        prompt_id,
+        unique_id,
+        obj,
+        input_data_all,
+        func,
+        allow_interrupt=False,
+        execution_block_cb=None,
+        pre_execute_cb=None,
+        v3_data=None,
     ):
         if func == getattr(obj, "FUNCTION", None) and hasattr(obj, "__class__"):
             try:
@@ -172,8 +186,15 @@ def _install_async(execution, map_name: str) -> None:
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug("[PromptToolkit] capture error: %s", exc)
         return await original_map(
-            prompt_id, unique_id, obj, input_data_all, func,
-            allow_interrupt, execution_block_cb, pre_execute_cb, v3_data=v3_data,
+            prompt_id,
+            unique_id,
+            obj,
+            input_data_all,
+            func,
+            allow_interrupt,
+            execution_block_cb,
+            pre_execute_cb,
+            v3_data=v3_data,
         )
 
     setattr(execution, map_name, map_with_capture)
@@ -184,6 +205,7 @@ def _hook_execute(execution, *, sync: bool) -> None:
     original_execute = execution.execute
 
     if sync:
+
         def execute_with_prompt_tracking(*args, **kwargs):
             if len(args) >= 7:
                 prompt_id = args[6]
@@ -193,6 +215,7 @@ def _hook_execute(execution, *, sync: bool) -> None:
 
         execution.execute = execute_with_prompt_tracking
     else:
+
         async def aexecute_with_prompt_tracking(*args, **kwargs):
             if len(args) >= 7:
                 prompt_id = args[6]
