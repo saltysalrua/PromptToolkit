@@ -19,9 +19,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import comfy.model_management  # type: ignore[import-not-found]
 import torch  # type: ignore[import-not-found]  # provided by the ComfyUI runtime
 
-import comfy.model_management  # type: ignore[import-not-found]
+from .ai_bridge import register_resolution
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,22 @@ class ResolutionMasterPT:
                 logger.warning("[ResolutionMasterPT] Error detecting dimensions: %s", e)
 
         rescale_factor = rescale_value
+
+        # Publish the executed state to the AI bridge so a harness can read
+        # it back even when no browser tab is pushing widget syncs.
+        register_resolution(
+            unique_id,
+            {
+                "width": width,
+                "height": height,
+                "batch_size": batch_size,
+                "mode": mode,
+                "latent_type": latent_type,
+                "auto_detect": bool(auto_detect),
+                "rescale_mode": rescale_mode,
+                "rescale_value": rescale_factor,
+            },
+        )
 
         if latent_type == "latent_128x16":
             # Flux 2 uses 128 channels and divides by 16

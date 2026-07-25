@@ -6,10 +6,10 @@ import { app } from "../../../scripts/app.js";
  * DOM widget UI styled after the original Comfyui-Resolution-Master:
  *  - 2D pad: dot grid at 64-step, origin-anchored frame, knob + right/top
  *    edge handles, drag to set width/height (snapped to 64)
- *  - collapsible sections (比例 / 缩放 / 预设) like the original
- *  - rescale rows with radio-activated modes (manual / resolution / MP);
- *    the rescale_value widget always stores the COMPUTED factor
  *  - presets open a separate searchable dialog (category chips + list)
+ *  - the rescale_mode/rescale_value widgets stay hidden; the UI no longer
+ *    exposes ratio/rescale controls (slimmed down per user request), but
+ *    the factor is still computed so the outputs/AI bridge keep working
  *
  * width/height/rescale_mode/rescale_value/mode widgets are hidden but stay
  * serialized. Works in both the legacy canvas renderer and Nodes 2.0.
@@ -18,20 +18,6 @@ import { app } from "../../../scripts/app.js";
 const PAD_MIN = 0;
 const SNAP = 64;
 const RANGES = [2048, 3072, 4096]; // pad range selector (original default: 2048)
-const RESOLUTION_STEPS = [144, 240, 360, 480, 720, 820, 1080, 1440, 2160, 4320];
-
-const RATIOS = [
-	[1, 1],
-	[3, 2],
-	[2, 3],
-	[4, 3],
-	[3, 4],
-	[16, 9],
-	[9, 16],
-	[21, 9],
-	[9, 21],
-];
-
 // Preset data ported from Comfyui-Resolution-Master (ResolutionMasterConfig.js)
 const PRESETS = {
 	Standard: {
@@ -272,7 +258,6 @@ const CSS = `
 `;
 
 let cssInjected = false;
-let radioGroupSeq = 0;
 function injectCSS() {
 	if (cssInjected) return;
 	cssInjected = true;
@@ -299,7 +284,6 @@ function el(tag, cls, props = {}) {
 
 function setupResolutionMaster(node) {
 	injectCSS();
-	const radioGroup = `pt-rm-rescale-${++radioGroupSeq}`;
 	const wW = node.widgets?.find((w) => w.name === "width");
 	const wH = node.widgets?.find((w) => w.name === "height");
 	const wMode = node.widgets?.find((w) => w.name === "mode");
@@ -429,142 +413,14 @@ function setupResolutionMaster(node) {
 		return { wrap, body };
 	}
 
-	// 比例 section
-	const ratioSec = section("比例（保持像素总量）");
-	const ratioRow = el("div", "pt-rm-row");
-	ratioRow.style.flexWrap = "wrap";
-	for (const [rw, rh] of RATIOS) {
-		const b = el("button", "pt-rm-btn", { textContent: `${rw}:${rh}` });
-		b.addEventListener("click", (e) => {
-			e.stopPropagation();
-			const [w, h] = getWH();
-			const area = w * h;
-			const nw = Math.sqrt(area * (rw / rh));
-			setWH(
-				Math.round(nw / SNAP) * SNAP,
-				Math.round((nw * rh) / rw / SNAP) * SNAP,
-			);
-		});
-		ratioRow.appendChild(b);
-	}
-	ratioSec.body.appendChild(ratioRow);
+	// 比例/缩放 sections were removed to slim the node down. The rescale
+	// widgets stay hidden; setRaw + writeRescale keep them consistent for
+	// the node outputs and the AI bridge hook.
 
-	// 缩放 section: three radio-activated rows, like the original
-	const scaleSec = section("缩放");
-	const scaleRows = {};
-	const factorLabel = el("span", "pt-rm-val");
-	factorLabel.style.textAlign = "right";
-
-	function rawValue(mode) {
-		return mode === "resolution"
-			? props.ptResolution
-			: mode === "megapixels"
-				? props.ptMP
-				: props.ptManual;
-	}
 	function setRaw(mode, v) {
 		if (mode === "resolution") props.ptResolution = v;
 		else if (mode === "megapixels") props.ptMP = v;
 		else props.ptManual = v;
-	}
-
-	function makeScaleRow(mode, label, makeControl) {
-		const row = el("div", "pt-rm-row");
-		const radio = el("input", "pt-rm-radio", {
-			type: "radio",
-			name: radioGroup,
-		});
-		radio.checked = props.ptRescaleMode === mode;
-		radio.addEventListener("change", () => {
-			props.ptRescaleMode = mode;
-			writeRescale();
-		});
-		const lab = el("span", "", { textContent: label });
-		lab.style.minWidth = "36px";
-		const { control, refresh } = makeControl();
-		const valLabel = el("span", "pt-rm-val");
-		row.append(radio, lab, control, valLabel);
-		scaleSec.body.appendChild(row);
-		scaleRows[mode] = { radio, refresh: () => refresh(valLabel) };
-		return row;
-	}
-
-	makeScaleRow("manual", "倍率", () => {
-		const s = el("input", "pt-rm-slider", {
-			type: "range",
-			min: "0.1",
-			max: "4",
-			step: "0.1",
-		});
-		s.value = String(props.ptManual);
-		s.addEventListener("input", () => {
-			setRaw("manual", Number(s.value));
-			if (scaleRows.manual.radio.checked) {
-				props.ptRescaleMode = "manual";
-				writeRescale();
-			}
-			refreshScaleRows();
-		});
-		return {
-			control: s,
-			refresh: (v) => {
-				s.value = String(props.ptManual);
-				v.textContent = `${props.ptManual.toFixed(1)}×`;
-			},
-		};
-	});
-	makeScaleRow("resolution", "目标P", () => {
-		const s = el("select", "pt-rm-input");
-		s.style.flex = "1 1 auto";
-		for (const p of RESOLUTION_STEPS) s.add(new Option(`${p}p`, String(p)));
-		s.value = String(props.ptResolution);
-		s.addEventListener("change", () => {
-			setRaw("resolution", Number(s.value));
-			if (scaleRows.resolution.radio.checked) {
-				props.ptRescaleMode = "resolution";
-				writeRescale();
-			}
-			refreshScaleRows();
-		});
-		return {
-			control: s,
-			refresh: (v) => {
-				s.value = String(props.ptResolution);
-				v.textContent = `${props.ptResolution}p`;
-			},
-		};
-	});
-	makeScaleRow("megapixels", "目标MP", () => {
-		const s = el("input", "pt-rm-slider", {
-			type: "range",
-			min: "0.5",
-			max: "6",
-			step: "0.1",
-		});
-		s.value = String(props.ptMP);
-		s.addEventListener("input", () => {
-			setRaw("megapixels", Number(s.value));
-			if (scaleRows.megapixels.radio.checked) {
-				props.ptRescaleMode = "megapixels";
-				writeRescale();
-			}
-			refreshScaleRows();
-		});
-		return {
-			control: s,
-			refresh: (v) => {
-				s.value = String(props.ptMP);
-				v.textContent = `${props.ptMP.toFixed(1)}MP`;
-			},
-		};
-	});
-	scaleSec.body.appendChild(factorLabel);
-
-	function refreshScaleRows() {
-		for (const mode of Object.keys(scaleRows)) {
-			scaleRows[mode].radio.checked = props.ptRescaleMode === mode;
-			scaleRows[mode].refresh();
-		}
 	}
 
 	// 预设 section: button opens a searchable dialog
@@ -738,7 +594,7 @@ function setupResolutionMaster(node) {
 		search.focus();
 	}
 
-	container.append(pad, dimsRow, ratioSec.wrap, scaleSec.wrap, presetSec.wrap);
+	container.append(pad, dimsRow, presetSec.wrap);
 
 	// ---- state / pad ----------------------------------------------------------
 	const state = {
@@ -760,16 +616,6 @@ function setupResolutionMaster(node) {
 		const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 		const g = gcd(w, h) || 1;
 		dimsLabel.textContent = `${w / g}:${h / g} · ${mp.toFixed(2)}MP`;
-		refreshScaleRows();
-		const factor = computeFactor(
-			props.ptRescaleMode,
-			rawValue(props.ptRescaleMode),
-			w,
-			h,
-		);
-		const sw = Math.round(w * factor);
-		const sh = Math.round(h * factor);
-		factorLabel.textContent = `= ×${factor.toFixed(3)} → ${sw}×${sh}`;
 		refreshPresetName();
 	}
 
@@ -1000,6 +846,39 @@ function setupResolutionMaster(node) {
 		},
 	);
 	domWidget.serialize = false;
+
+	// AI bridge hook (see web/ai_bridge.js): apply a patch from the harness
+	// with proper rescale-factor recomputation and UI refresh, instead of
+	// blindly writing widget values.
+	node._ptResolutionApply = (patch = {}) => {
+		const num = (v) => (v == null ? null : Number(v));
+		if (patch.width != null || patch.height != null) {
+			const [cw, ch] = getWH();
+			setWH(num(patch.width) ?? cw, num(patch.height) ?? ch);
+		}
+		if (patch.rescale_mode != null) {
+			const m = String(patch.rescale_mode);
+			if (["manual", "resolution", "megapixels"].includes(m)) {
+				props.ptRescaleMode = m;
+			}
+		}
+		if (patch.rescale_value != null) {
+			setRaw(props.ptRescaleMode, num(patch.rescale_value));
+		}
+		if (patch.rescale_mode != null || patch.rescale_value != null) {
+			writeRescale();
+		}
+		for (const name of ["batch_size", "latent_type", "mode", "auto_detect"]) {
+			if (patch[name] == null) continue;
+			const w = node.widgets?.find((x) => x.name === name);
+			if (w) {
+				w.value = patch[name];
+				w.callback?.(w.value);
+			}
+		}
+		syncInputs();
+		node.setDirtyCanvas?.(true, true);
+	};
 
 	// The rescale widgets may hold stale raw values from older versions of
 	// this port; normalize to the computed factor on setup.
