@@ -39,7 +39,10 @@ async function api<T = unknown>(
 	return body as T;
 }
 
-async function apiPost<T = unknown>(path: string, payload?: unknown): Promise<T> {
+async function apiPost<T = unknown>(
+	path: string,
+	payload?: unknown,
+): Promise<T> {
 	return api<T>(path, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -242,18 +245,25 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			node_id: Type.String({ description: "Resolution Master node id" }),
 			width: Type.Optional(
-				Type.Number({ description: "Image width in px (snapped to multiple of 64)" }),
+				Type.Number({
+					description: "Image width in px (snapped to multiple of 64)",
+				}),
 			),
 			height: Type.Optional(
-				Type.Number({ description: "Image height in px (snapped to multiple of 64)" }),
+				Type.Number({
+					description: "Image height in px (snapped to multiple of 64)",
+				}),
 			),
 			batch_size: Type.Optional(
 				Type.Number({ description: "Latent batch size (1-4096)" }),
 			),
 			latent_type: Type.Optional(
-				Type.Union([Type.Literal("latent_4x8"), Type.Literal("latent_128x16")], {
-					description: "latent_4x8 = SD1.5/SDXL/Flux; latent_128x16 = Flux 2",
-				}),
+				Type.Union(
+					[Type.Literal("latent_4x8"), Type.Literal("latent_128x16")],
+					{
+						description: "latent_4x8 = SD1.5/SDXL/Flux; latent_128x16 = Flux 2",
+					},
+				),
 			),
 			rescale_mode: Type.Optional(
 				Type.Union(
@@ -350,7 +360,10 @@ export default function (pi: ExtensionAPI) {
 			let idlePolls = 0;
 			while (Date.now() < deadline) {
 				if (signal?.aborted) {
-					return { content: [{ type: "text", text: "Cancelled" }], details: {} };
+					return {
+						content: [{ type: "text", text: "Cancelled" }],
+						details: {},
+					};
 				}
 				await new Promise((r) => setTimeout(r, 3000));
 				const latest = await api<{ images: ImageEntry[] }>(
