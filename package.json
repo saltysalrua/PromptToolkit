@@ -1,0 +1,13 @@
+{
+  "name": "prompttoolkit-comfyui-bridge",
+  "version": "0.2.0",
+  "description": "pi extension bridging the ComfyUI PromptToolkit AI bridge (prompt/resolution control, queueing, image retrieval)",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./pi-extension"]
+  }
+}
